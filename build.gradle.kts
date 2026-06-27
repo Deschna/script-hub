@@ -9,6 +9,8 @@ group = "dev.deschna"
 version = "0.0.1-SNAPSHOT"
 description = "ScriptHub API service"
 
+val graalVmVersion = "25.0.3"
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
@@ -24,6 +26,8 @@ dependencies {
     annotationProcessor("org.projectlombok:lombok")
 
     implementation("org.springframework.boot:spring-boot-starter")
+    implementation("org.graalvm.polyglot:polyglot:$graalVmVersion")
+    implementation("org.graalvm.polyglot:js:$graalVmVersion")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

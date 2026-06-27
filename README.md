@@ -6,6 +6,7 @@ Initial Spring Boot baseline for the ScriptHub project.
 
 - Java 21
 - Spring Boot 3.5
+- GraalVM Polyglot
 - Gradle
 - Lombok
 - JUnit 5

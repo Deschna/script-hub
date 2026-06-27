@@ -14,6 +14,8 @@ public class ScriptExecutionService {
     @NonNull
     private final ScriptExecutionRepository repository;
     @NonNull
+    private final ScriptExecutor scriptExecutor;
+    @NonNull
     private final Clock clock;
 
     public ScriptExecution submit(String body) {
@@ -22,6 +24,7 @@ public class ScriptExecutionService {
         }
         ScriptExecution execution = ScriptExecution.create(body, clock.instant());
         repository.save(execution);
+        scriptExecutor.execute(execution);
         return execution;
     }
 }
