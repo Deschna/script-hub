@@ -3,6 +3,8 @@ package dev.deschna.scripthub.script.application;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptExecutionRepository;
 import java.time.Clock;
+import java.util.Objects;
+import java.util.UUID;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -26,5 +28,11 @@ public class ScriptExecutionService {
         repository.save(execution);
         scriptExecutor.execute(execution);
         return execution;
+    }
+
+    public ScriptExecution getById(UUID id) {
+        Objects.requireNonNull(id);
+        return repository.findById(id)
+                .orElseThrow(() -> new ScriptExecutionNotFoundException(id));
     }
 }
