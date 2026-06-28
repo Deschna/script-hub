@@ -25,7 +25,7 @@ dependencies {
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
 
-    implementation("org.springframework.boot:spring-boot-starter")
+    implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.graalvm.polyglot:polyglot:$graalVmVersion")
     implementation("org.graalvm.polyglot:js:$graalVmVersion")
 
