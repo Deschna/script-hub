@@ -1,12 +1,14 @@
 # ScriptHub
 
-Initial Spring Boot baseline for the ScriptHub project.
+Spring Boot API for asynchronous JavaScript execution on GraalVM with output
+available during execution.
 
 ## Tech Stack
 
 - Java 21
 - Spring Boot 3.5
 - GraalVM Polyglot
+- SpringDoc OpenAPI
 - Gradle
 - Lombok
 - JUnit 5
@@ -33,6 +35,8 @@ Unix-like:
 ```shell
 ./gradlew bootRun
 ```
+
+OpenAPI documentation is available at [Swagger UI](http://localhost:8080/swagger-ui.html).
 
 ## Build
 
