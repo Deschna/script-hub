@@ -1,4 +1,4 @@
-package dev.deschna.scripthub.script.infrastructure;
+package dev.deschna.scripthub.script.infrastructure.graalvm;
 
 import dev.deschna.scripthub.script.application.ScriptExecutor;
 import dev.deschna.scripthub.script.domain.ScriptExecution;

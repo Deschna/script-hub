@@ -1,4 +1,4 @@
-package dev.deschna.scripthub.script.infrastructure;
+package dev.deschna.scripthub.script.infrastructure.graalvm;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
