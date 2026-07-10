@@ -40,7 +40,7 @@ public class ScriptExecution {
 
     public synchronized void start(Instant startedAt) {
         Objects.requireNonNull(startedAt);
-        requireStatus(ScriptStatus.QUEUED);
+        requireStatusBeforeTransitionIn(ScriptStatus.QUEUED);
         requireNotBefore(startedAt, submittedAt);
         this.startedAt = startedAt;
         status = ScriptStatus.RUNNING;
@@ -48,7 +48,7 @@ public class ScriptExecution {
 
     public synchronized void complete(Instant finishedAt) {
         Objects.requireNonNull(finishedAt);
-        requireStatus(ScriptStatus.RUNNING);
+        requireStatusBeforeTransitionIn(ScriptStatus.RUNNING);
         requireNotBefore(finishedAt, startedAt);
         this.finishedAt = finishedAt;
         status = ScriptStatus.COMPLETED;
@@ -57,7 +57,7 @@ public class ScriptExecution {
     public synchronized void fail(Instant finishedAt, String errorStackTrace) {
         Objects.requireNonNull(finishedAt);
         Objects.requireNonNull(errorStackTrace);
-        requireStatus(ScriptStatus.RUNNING);
+        requireStatusBeforeTransitionIn(ScriptStatus.RUNNING);
         requireNotBefore(finishedAt, startedAt);
         this.finishedAt = finishedAt;
         this.errorStackTrace = errorStackTrace;
@@ -66,9 +66,7 @@ public class ScriptExecution {
 
     public synchronized void stop(Instant finishedAt) {
         Objects.requireNonNull(finishedAt);
-        if (status != ScriptStatus.QUEUED && status != ScriptStatus.RUNNING) {
-            throw invalidTransition();
-        }
+        requireStatusBeforeTransitionIn(ScriptStatus.QUEUED, ScriptStatus.RUNNING);
         requireNotBefore(finishedAt, startedAt == null ? submittedAt : startedAt);
         this.finishedAt = finishedAt;
         status = ScriptStatus.STOPPED;
@@ -76,13 +74,13 @@ public class ScriptExecution {
 
     public synchronized void appendStandardOutput(String output) {
         Objects.requireNonNull(output);
-        requireStatus(ScriptStatus.RUNNING);
+        requireRunningStatus();
         standardOutput.append(output);
     }
 
     public synchronized void appendErrorOutput(String output) {
         Objects.requireNonNull(output);
-        requireStatus(ScriptStatus.RUNNING);
+        requireRunningStatus();
         errorOutput.append(output);
     }
 
@@ -101,19 +99,24 @@ public class ScriptExecution {
         return Optional.of(Duration.between(startedAt, finishedAt));
     }
 
-    private void requireStatus(ScriptStatus expectedStatus) {
-        if (status != expectedStatus) {
-            throw invalidTransition();
+    private void requireRunningStatus() {
+        if (status != ScriptStatus.RUNNING) {
+            throw new InvalidScriptExecutionStateException(status, ScriptStatus.RUNNING);
         }
+    }
+
+    private void requireStatusBeforeTransitionIn(ScriptStatus... expectedStatuses) {
+        for (ScriptStatus expectedStatus : expectedStatuses) {
+            if (status == expectedStatus) {
+                return;
+            }
+        }
+        throw new InvalidScriptExecutionTransitionException(status, expectedStatuses);
     }
 
     private void requireNotBefore(Instant actual, Instant expectedMinimum) {
         if (actual.isBefore(expectedMinimum)) {
             throw new IllegalArgumentException("Timestamp must not go backwards");
         }
-    }
-
-    private IllegalStateException invalidTransition() {
-        return new IllegalStateException("Invalid script execution status transition");
     }
 }

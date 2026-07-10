@@ -1,8 +1,8 @@
 package dev.deschna.scripthub.script.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.time.Duration;
@@ -109,7 +109,7 @@ class ScriptExecutionTest {
     void rejectsCompletingQueuedScriptExecution() {
         ScriptExecution execution = createExecution();
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
                 .isThrownBy(() -> execution.complete(FINISHED_AT));
     }
 
@@ -157,7 +157,7 @@ class ScriptExecutionTest {
     void rejectsFailingQueuedScriptExecution() {
         ScriptExecution execution = createExecution();
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
                 .isThrownBy(() -> execution.fail(FINISHED_AT, ERROR_STACK_TRACE));
     }
 
@@ -216,7 +216,7 @@ class ScriptExecutionTest {
         execution.start(STARTED_AT);
         execution.complete(FINISHED_AT);
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
                 .isThrownBy(() -> execution.stop(FINISHED_AT));
     }
 
@@ -246,7 +246,7 @@ class ScriptExecutionTest {
     void rejectsAppendingStandardOutputBeforeStart() {
         ScriptExecution execution = createExecution();
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionStateException.class)
                 .isThrownBy(() -> execution.appendStandardOutput("hello"));
     }
 
@@ -256,7 +256,7 @@ class ScriptExecutionTest {
         execution.start(STARTED_AT);
         execution.complete(FINISHED_AT);
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionStateException.class)
                 .isThrownBy(() -> execution.appendStandardOutput("late output"));
     }
 
@@ -286,7 +286,7 @@ class ScriptExecutionTest {
     void rejectsAppendingErrorOutputBeforeStart() {
         ScriptExecution execution = createExecution();
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionStateException.class)
                 .isThrownBy(() -> execution.appendErrorOutput("error"));
     }
 
@@ -296,7 +296,7 @@ class ScriptExecutionTest {
         execution.start(STARTED_AT);
         execution.complete(FINISHED_AT);
 
-        assertThatIllegalStateException()
+        assertThatExceptionOfType(InvalidScriptExecutionStateException.class)
                 .isThrownBy(() -> execution.appendErrorOutput("late error"));
     }
 
