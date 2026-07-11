@@ -1,7 +1,10 @@
 package dev.deschna.scripthub.script.infrastructure.graalvm;
 
 import dev.deschna.scripthub.script.application.ScriptExecutor;
+import dev.deschna.scripthub.script.domain.InvalidScriptExecutionStateException;
+import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
+import dev.deschna.scripthub.script.domain.ScriptStatus;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -14,19 +17,23 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 @Component
-public class GraalScriptExecutor implements ScriptExecutor {
+class GraalScriptExecutor implements ScriptExecutor {
 
     private static final String DEFAULT_LANGUAGE_ID = "js";
+    private static final boolean CANCEL_IF_EXECUTING = true;
 
     private final Executor executor;
     private final Clock clock;
+    private final GraalScriptContextRegistry contextRegistry;
 
     public GraalScriptExecutor(
             @Qualifier("scriptExecutionTaskExecutor") Executor executor,
-            Clock clock
+            Clock clock,
+            GraalScriptContextRegistry contextRegistry
     ) {
         this.executor = Objects.requireNonNull(executor);
         this.clock = Objects.requireNonNull(clock);
+        this.contextRegistry = Objects.requireNonNull(contextRegistry);
     }
 
     @Override
@@ -35,18 +42,82 @@ public class GraalScriptExecutor implements ScriptExecutor {
         executor.execute(() -> executeScript(execution));
     }
 
+    @Override
+    public void stop(ScriptExecution execution) {
+        Objects.requireNonNull(execution);
+        contextRegistry.findByExecutionId(execution.getId())
+                .ifPresent(this::stopContext);
+    }
+
     private void executeScript(ScriptExecution execution) {
-        execution.start(clock.instant());
+        // The task may have been stopped while it was still waiting in the executor queue.
+        if (!tryStart(execution)) {
+            return;
+        }
         try (Context context = Context.newBuilder(DEFAULT_LANGUAGE_ID)
                 .out(outputStreamFor(execution::appendStandardOutput))
                 .err(outputStreamFor(execution::appendErrorOutput))
                 .build()) {
+            contextRegistry.register(execution.getId(), context);
+            // Stop may happen while the Context is being created, before it is available
+            // in the registry.
+            if (isStopped(execution)) {
+                return;
+            }
             context.eval(DEFAULT_LANGUAGE_ID, execution.getBody());
         } catch (PolyglotException exception) {
+            // Context.close(true) reports cancellation as PolyglotException. Stopped
+            // executions should remain STOPPED and should not receive failure diagnostics.
+            if (isStopped(execution)) {
+                return;
+            }
             execution.fail(clock.instant(), guestStackTraceOf(exception));
             return;
+        } catch (InvalidScriptExecutionStateException
+                | InvalidScriptExecutionTransitionException exception) {
+            ignoreIfStopped(execution, exception);
+        } finally {
+            contextRegistry.unregister(execution.getId());
         }
-        execution.complete(clock.instant());
+        complete(execution);
+    }
+
+    private boolean tryStart(ScriptExecution execution) {
+        try {
+            execution.start(clock.instant());
+            return true;
+        } catch (InvalidScriptExecutionTransitionException exception) {
+            if (isStopped(execution)) {
+                return false;
+            }
+            throw exception;
+        }
+    }
+
+    private void complete(ScriptExecution execution) {
+        try {
+            execution.complete(clock.instant());
+        } catch (InvalidScriptExecutionTransitionException exception) {
+            ignoreIfStopped(execution, exception);
+        }
+    }
+
+    private boolean isStopped(ScriptExecution execution) {
+        return execution.getStatus() == ScriptStatus.STOPPED;
+    }
+
+    private void stopContext(Context context) {
+        context.close(CANCEL_IF_EXECUTING);
+    }
+
+    private void ignoreIfStopped(ScriptExecution execution, RuntimeException exception) {
+        // The stop operation marks the execution as STOPPED before GraalVM finishes
+        // closing the Context.
+        // Output append can then fail with a state error, and completion can fail with a
+        // transition error. Both are expected only for stopped executions.
+        if (!isStopped(execution)) {
+            throw exception;
+        }
     }
 
     private OutputStream outputStreamFor(Consumer<String> outputAppender) {

@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
@@ -30,7 +31,8 @@ class GraalScriptExecutorTest {
             console.error('warning finished');
             """;
 
-    private final GraalScriptExecutor executor = new GraalScriptExecutor(Runnable::run, CLOCK);
+    private final GraalScriptExecutor executor =
+            new GraalScriptExecutor(Runnable::run, CLOCK, new GraalScriptContextRegistry());
 
     @Test
     void completesSuccessfulScriptExecution() {
@@ -70,7 +72,8 @@ class GraalScriptExecutorTest {
     @Test
     void exposesOutputWhileScriptIsRunning() {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
-        GraalScriptExecutor asyncExecutor = new GraalScriptExecutor(executorService, CLOCK);
+        GraalScriptExecutor asyncExecutor =
+                new GraalScriptExecutor(executorService, CLOCK, new GraalScriptContextRegistry());
         ScriptExecution execution = createExecution(LONG_RUNNING_SCRIPT);
 
         try {
@@ -92,6 +95,59 @@ class GraalScriptExecutorTest {
         } finally {
             executorService.shutdownNow();
         }
+    }
+
+    @Test
+    void stopsRunningScriptExecution() throws Exception {
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        GraalScriptExecutor asyncExecutor =
+                new GraalScriptExecutor(executorService, CLOCK, new GraalScriptContextRegistry());
+        ScriptExecution execution = createExecution(LONG_RUNNING_SCRIPT);
+
+        try {
+            asyncExecutor.execute(execution);
+            awaitUntil(() -> execution.getStandardOutput().contains("started"));
+            awaitUntil(() -> execution.getErrorOutput().contains("warning started"));
+
+            execution.stop(EXECUTED_AT);
+            asyncExecutor.stop(execution);
+
+            awaitExecutorWorkerAvailable(executorService);
+
+            assertThat(execution.getStatus()).isEqualTo(ScriptStatus.STOPPED);
+            assertThat(execution.getFinishedAt()).isEqualTo(EXECUTED_AT);
+            assertThat(execution.getStandardOutput().lines()).contains("started");
+            assertThat(execution.getStandardOutput().lines()).doesNotContain("finished");
+            assertThat(execution.getErrorOutput().lines()).contains("warning started");
+            assertThat(execution.getErrorOutput().lines()).doesNotContain("warning finished");
+            assertThat(execution.getErrorStackTrace()).isNull();
+        } finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void ignoresStoppedScriptExecutionBeforeStart() {
+        ScriptExecution execution = createExecution("console.log('should not run')");
+        execution.stop(EXECUTED_AT);
+
+        executor.execute(execution);
+
+        assertThat(execution.getStatus()).isEqualTo(ScriptStatus.STOPPED);
+        assertThat(execution.getStartedAt()).isNull();
+        assertThat(execution.getStandardOutput()).isEmpty();
+    }
+
+    @Test
+    void ignoresStoppingScriptExecutionWithoutRegisteredContext() {
+        ScriptExecution execution = createExecution("console.log('not running yet')");
+
+        // Executor stops only runtime context, not domain state.
+        executor.stop(execution);
+
+        assertThat(execution.getStatus()).isEqualTo(ScriptStatus.QUEUED);
+        assertThat(execution.getStartedAt()).isNull();
+        assertThat(execution.getFinishedAt()).isNull();
     }
 
     @Test
@@ -135,6 +191,12 @@ class GraalScriptExecutorTest {
                 .isThrownBy(() -> executor.execute(null));
     }
 
+    @Test
+    void rejectsMissingScriptExecutionWhenStopping() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> executor.stop(null));
+    }
+
     private ScriptExecution createExecution(String body) {
         return ScriptExecution.create(body, SUBMITTED_AT);
     }
@@ -156,5 +218,11 @@ class GraalScriptExecutorTest {
             Thread.currentThread().interrupt();
             throw new AssertionError("Interrupted while waiting for condition", exception);
         }
+    }
+
+    private void awaitExecutorWorkerAvailable(ExecutorService executorService) throws Exception {
+        Future<?> nextTask = executorService.submit(() -> {
+        });
+        nextTask.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 }

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptExecutionRepository;
 import dev.deschna.scripthub.script.domain.ScriptStatus;
@@ -57,6 +58,56 @@ class ScriptExecutionServiceTest {
         assertThat(foundExecution).isSameAs(execution);
         verify(repository).findById(execution.getId());
         verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void stopsQueuedScriptExecution() {
+        ScriptExecution execution = ScriptExecution.create(BODY, NOW);
+        when(repository.findById(execution.getId())).thenReturn(Optional.of(execution));
+
+        ScriptExecution stoppedExecution = service.stop(execution.getId());
+
+        assertThat(stoppedExecution).isSameAs(execution);
+        assertThat(stoppedExecution.getStatus()).isEqualTo(ScriptStatus.STOPPED);
+        assertThat(stoppedExecution.getFinishedAt()).isEqualTo(NOW);
+        verify(repository).findById(execution.getId());
+        verify(scriptExecutor).stop(same(execution));
+    }
+
+    @Test
+    void rejectsStoppingUnknownScriptExecution() {
+        when(repository.findById(UNKNOWN_ID)).thenReturn(Optional.empty());
+
+        assertThatExceptionOfType(ScriptExecutionNotFoundException.class)
+                .isThrownBy(() -> service.stop(UNKNOWN_ID))
+                .withMessage("Script execution not found: " + UNKNOWN_ID);
+
+        verify(repository).findById(UNKNOWN_ID);
+        verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void rejectsStoppingCompletedScriptExecution() {
+        ScriptExecution execution = ScriptExecution.create(BODY, NOW);
+        execution.start(NOW);
+        execution.complete(NOW);
+        when(repository.findById(execution.getId())).thenReturn(Optional.of(execution));
+
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
+                .isThrownBy(() -> service.stop(execution.getId()))
+                .withMessage("Invalid script execution status: COMPLETED, expected: "
+                        + "QUEUED, RUNNING");
+
+        verify(repository).findById(execution.getId());
+        verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void rejectsMissingIdWhenStopping() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> service.stop(null));
+
+        verifyNoInteractions(repository, scriptExecutor);
     }
 
     @Test

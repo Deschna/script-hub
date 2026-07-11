@@ -35,4 +35,11 @@ public class ScriptExecutionService {
         return repository.findById(id)
                 .orElseThrow(() -> new ScriptExecutionNotFoundException(id));
     }
+
+    public ScriptExecution stop(UUID id) {
+        ScriptExecution execution = getById(id);
+        execution.stop(clock.instant());
+        scriptExecutor.stop(execution);
+        return execution;
+    }
 }

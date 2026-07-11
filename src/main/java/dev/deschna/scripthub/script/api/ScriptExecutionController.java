@@ -35,4 +35,9 @@ public class ScriptExecutionController {
     public ScriptExecutionResponse getById(@PathVariable UUID id) {
         return ScriptExecutionResponse.from(service.getById(id));
     }
+
+    @PostMapping(value = "/{id}/stop", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ScriptExecutionResponse stop(@PathVariable UUID id) {
+        return ScriptExecutionResponse.from(service.stop(id));
+    }
 }

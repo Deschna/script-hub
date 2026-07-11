@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.deschna.scripthub.script.application.InvalidScriptSubmissionException;
 import dev.deschna.scripthub.script.application.ScriptExecutionNotFoundException;
 import dev.deschna.scripthub.script.application.ScriptExecutionService;
+import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptStatus;
 import java.time.Instant;
@@ -27,6 +28,7 @@ class ScriptExecutionControllerTest {
     private static final String BODY = "console.log('hello')";
     private static final Instant SUBMITTED_AT = Instant.parse("2026-06-14T10:15:30Z");
     private static final Instant STARTED_AT = Instant.parse("2026-06-14T10:15:31Z");
+    private static final Instant FINISHED_AT = Instant.parse("2026-06-14T10:15:35Z");
     private static final UUID UNKNOWN_ID =
             UUID.fromString("00000000-0000-0000-0000-000000000404");
 
@@ -73,6 +75,20 @@ class ScriptExecutionControllerTest {
     }
 
     @Test
+    void stopsScriptExecution() throws Exception {
+        ScriptExecution execution = ScriptExecution.create(BODY, SUBMITTED_AT);
+        execution.start(STARTED_AT);
+        execution.stop(FINISHED_AT);
+        when(service.stop(execution.getId())).thenReturn(execution);
+
+        mockMvc.perform(post("/scripts/{id}/stop", execution.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(execution.getId().toString()))
+                .andExpect(jsonPath("$.status").value(ScriptStatus.STOPPED.name()))
+                .andExpect(jsonPath("$.finishedAt").value(FINISHED_AT.toString()));
+    }
+
+    @Test
     void returnsBadRequestForInvalidSubmission() throws Exception {
         when(service.submit("  "))
                 .thenThrow(new InvalidScriptSubmissionException("Script body must not be blank"));
@@ -92,5 +108,34 @@ class ScriptExecutionControllerTest {
         mockMvc.perform(get("/scripts/{id}", UNKNOWN_ID))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Script execution not found: " + UNKNOWN_ID));
+    }
+
+    @Test
+    void returnsNotFoundWhenStoppingUnknownScriptExecution() throws Exception {
+        when(service.stop(UNKNOWN_ID))
+                .thenThrow(new ScriptExecutionNotFoundException(UNKNOWN_ID));
+
+        mockMvc.perform(post("/scripts/{id}/stop", UNKNOWN_ID))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Script execution not found: " + UNKNOWN_ID));
+    }
+
+    @Test
+    void returnsConflictWhenScriptExecutionCannotBeStopped() throws Exception {
+        ScriptExecution execution = ScriptExecution.create(BODY, SUBMITTED_AT);
+        execution.start(STARTED_AT);
+        execution.complete(FINISHED_AT);
+        when(service.stop(execution.getId()))
+                .thenThrow(new InvalidScriptExecutionTransitionException(
+                        ScriptStatus.COMPLETED,
+                        ScriptStatus.QUEUED,
+                        ScriptStatus.RUNNING
+                ));
+
+        mockMvc.perform(post("/scripts/{id}/stop", execution.getId()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail")
+                        .value("Invalid script execution status: COMPLETED, expected: "
+                                + "QUEUED, RUNNING"));
     }
 }
