@@ -171,6 +171,54 @@ class ScriptExecutionTest {
     }
 
     @Test
+    void timesOutRunningScriptExecution() {
+        ScriptExecution execution = createExecution();
+
+        execution.start(STARTED_AT);
+        execution.timeOut(FINISHED_AT);
+
+        assertThat(execution.getStatus()).isEqualTo(ScriptStatus.TIMED_OUT);
+        assertThat(execution.getFinishedAt()).isEqualTo(FINISHED_AT);
+        assertThat(execution.getDuration()).contains(DURATION);
+    }
+
+    @Test
+    void rejectsTimingOutQueuedScriptExecution() {
+        ScriptExecution execution = createExecution();
+
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
+                .isThrownBy(() -> execution.timeOut(FINISHED_AT));
+    }
+
+    @Test
+    void rejectsMissingFinishedAtWhenTimingOut() {
+        ScriptExecution execution = createExecution();
+        execution.start(STARTED_AT);
+
+        assertThatNullPointerException()
+                .isThrownBy(() -> execution.timeOut(null));
+    }
+
+    @Test
+    void rejectsTimingOutBeforeStart() {
+        ScriptExecution execution = createExecution();
+        execution.start(STARTED_AT);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> execution.timeOut(SUBMITTED_AT));
+    }
+
+    @Test
+    void rejectsChangingTimedOutScriptExecution() {
+        ScriptExecution execution = createExecution();
+        execution.start(STARTED_AT);
+        execution.timeOut(FINISHED_AT);
+
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
+                .isThrownBy(() -> execution.stop(FINISHED_AT));
+    }
+
+    @Test
     void stopsQueuedScriptExecution() {
         ScriptExecution execution = createExecution();
 

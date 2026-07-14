@@ -1,3 +1,7 @@
 spring:
   application:
     name: script-hub
+
+script-hub:
+  execution:
+    timeout: 30s

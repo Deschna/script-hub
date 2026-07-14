@@ -64,6 +64,14 @@ public class ScriptExecution {
         status = ScriptStatus.FAILED;
     }
 
+    public synchronized void timeOut(Instant finishedAt) {
+        Objects.requireNonNull(finishedAt);
+        requireStatusBeforeTransitionIn(ScriptStatus.RUNNING);
+        requireNotBefore(finishedAt, startedAt);
+        this.finishedAt = finishedAt;
+        status = ScriptStatus.TIMED_OUT;
+    }
+
     public synchronized void stop(Instant finishedAt) {
         Objects.requireNonNull(finishedAt);
         requireStatusBeforeTransitionIn(ScriptStatus.QUEUED, ScriptStatus.RUNNING);

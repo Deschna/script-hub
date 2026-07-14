@@ -6,5 +6,6 @@ public enum ScriptStatus {
     RUNNING,
     COMPLETED,
     FAILED,
+    TIMED_OUT,
     STOPPED
 }

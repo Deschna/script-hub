@@ -1,19 +1,33 @@
 package dev.deschna.scripthub.script.infrastructure.graalvm;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptStatus;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 class GraalScriptExecutorTest {
 
@@ -22,6 +36,8 @@ class GraalScriptExecutorTest {
     private static final Clock CLOCK = Clock.fixed(EXECUTED_AT, ZoneOffset.UTC);
     private static final long WAIT_TIMEOUT_SECONDS = 5;
     private static final long POLL_INTERVAL_MILLIS = 10;
+    private static final Duration EXECUTION_TIMEOUT = Duration.ofSeconds(10);
+
     private static final String LONG_RUNNING_SCRIPT = """
             console.log('started');
             console.error('warning started');
@@ -30,9 +46,26 @@ class GraalScriptExecutorTest {
             console.log('finished');
             console.error('warning finished');
             """;
+    private static final String INFINITE_SCRIPT = """
+            console.log('started');
+            while (true) {}
+            """;
+
+    private static final ThreadPoolTaskScheduler timeoutScheduler = createTimeoutScheduler();
 
     private final GraalScriptExecutor executor =
-            new GraalScriptExecutor(Runnable::run, CLOCK, new GraalScriptContextRegistry());
+            new GraalScriptExecutor(
+                    Runnable::run,
+                    timeoutScheduler,
+                    CLOCK,
+                    new GraalScriptContextRegistry(),
+                    EXECUTION_TIMEOUT
+            );
+
+    @AfterAll
+    static void shutDownTimeoutScheduler() {
+        timeoutScheduler.destroy();
+    }
 
     @Test
     void completesSuccessfulScriptExecution() {
@@ -72,8 +105,7 @@ class GraalScriptExecutorTest {
     @Test
     void exposesOutputWhileScriptIsRunning() {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
-        GraalScriptExecutor asyncExecutor =
-                new GraalScriptExecutor(executorService, CLOCK, new GraalScriptContextRegistry());
+        GraalScriptExecutor asyncExecutor = createAsyncExecutor(executorService);
         ScriptExecution execution = createExecution(LONG_RUNNING_SCRIPT);
 
         try {
@@ -100,8 +132,7 @@ class GraalScriptExecutorTest {
     @Test
     void stopsRunningScriptExecution() throws Exception {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
-        GraalScriptExecutor asyncExecutor =
-                new GraalScriptExecutor(executorService, CLOCK, new GraalScriptContextRegistry());
+        GraalScriptExecutor asyncExecutor = createAsyncExecutor(executorService);
         ScriptExecution execution = createExecution(LONG_RUNNING_SCRIPT);
 
         try {
@@ -122,6 +153,55 @@ class GraalScriptExecutorTest {
             assertThat(execution.getErrorOutput().lines()).doesNotContain("warning finished");
             assertThat(execution.getErrorStackTrace()).isNull();
         } finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void timesOutLongRunningScriptExecution() throws Exception {
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        TaskScheduler timeoutScheduler = mock(TaskScheduler.class);
+        ScheduledFuture<?> timeoutTask = mock(ScheduledFuture.class);
+        // Capture the timeout callback to trigger it after guest execution starts.
+        AtomicReference<Runnable> timeoutAction = new AtomicReference<>();
+        when(timeoutScheduler.getClock()).thenReturn(CLOCK);
+        when(timeoutScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    timeoutAction.set(invocation.getArgument(0));
+                    return timeoutTask;
+                });
+        GraalScriptExecutor timeoutExecutor = new GraalScriptExecutor(
+                executorService,
+                timeoutScheduler,
+                CLOCK,
+                new GraalScriptContextRegistry(),
+                EXECUTION_TIMEOUT
+        );
+        ScriptExecution execution = createExecution(INFINITE_SCRIPT);
+
+        try {
+            timeoutExecutor.execute(execution);
+            awaitUntil(() -> execution.getStandardOutput().contains("started"));
+
+            timeoutAction.get().run();
+            awaitExecutorWorkerAvailable(executorService);
+
+            assertThat(execution.getStatus()).isEqualTo(ScriptStatus.TIMED_OUT);
+            assertThat(execution.getFinishedAt()).isEqualTo(EXECUTED_AT);
+            assertThat(execution.getStandardOutput().lines()).containsExactly("started");
+            assertThat(execution.getErrorStackTrace()).isNull();
+            verify(timeoutScheduler).schedule(
+                    any(Runnable.class),
+                    eq(EXECUTED_AT.plus(EXECUTION_TIMEOUT))
+            );
+            verify(timeoutTask).cancel(false);
+        } finally {
+            // Ensure the infinite guest script cannot survive an assertion failure.
+            Runnable timeout = timeoutAction.get();
+            if (timeout != null) {
+                timeout.run();
+            }
+            timeoutExecutor.stop(execution);
             executorService.shutdownNow();
         }
     }
@@ -197,8 +277,39 @@ class GraalScriptExecutorTest {
                 .isThrownBy(() -> executor.stop(null));
     }
 
+    @ParameterizedTest
+    @ValueSource(longs = {0, -1})
+    void rejectsNonPositiveExecutionTimeout(long timeoutSeconds) {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new GraalScriptExecutor(
+                        Runnable::run,
+                        timeoutScheduler,
+                        CLOCK,
+                        new GraalScriptContextRegistry(),
+                        Duration.ofSeconds(timeoutSeconds)
+                ));
+    }
+
     private ScriptExecution createExecution(String body) {
         return ScriptExecution.create(body, SUBMITTED_AT);
+    }
+
+    private GraalScriptExecutor createAsyncExecutor(ExecutorService executorService) {
+        return new GraalScriptExecutor(
+                executorService,
+                timeoutScheduler,
+                CLOCK,
+                new GraalScriptContextRegistry(),
+                EXECUTION_TIMEOUT
+        );
+    }
+
+    private static ThreadPoolTaskScheduler createTimeoutScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setRemoveOnCancelPolicy(true);
+        scheduler.initialize();
+        return scheduler;
     }
 
     private void awaitUntil(BooleanSupplier condition) {
