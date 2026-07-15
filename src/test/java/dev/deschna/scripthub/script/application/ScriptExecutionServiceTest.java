@@ -3,7 +3,9 @@ package dev.deschna.scripthub.script.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -20,6 +22,7 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 class ScriptExecutionServiceTest {
@@ -46,6 +49,26 @@ class ScriptExecutionServiceTest {
         InOrder inOrder = inOrder(repository, scriptExecutor);
         inOrder.verify(repository).save(same(execution));
         inOrder.verify(scriptExecutor).execute(same(execution));
+    }
+
+    @Test
+    void removesScriptExecutionWhenDispatchIsRejected() {
+        ScriptExecutionRejectedException rejection = new ScriptExecutionRejectedException(
+                new IllegalStateException("Executor rejected task")
+        );
+        doThrow(rejection).when(scriptExecutor).execute(any());
+
+        assertThatExceptionOfType(ScriptExecutionRejectedException.class)
+                .isThrownBy(() -> service.submit(BODY))
+                .isSameAs(rejection);
+
+        ArgumentCaptor<ScriptExecution> executionCaptor =
+                ArgumentCaptor.forClass(ScriptExecution.class);
+        InOrder inOrder = inOrder(repository, scriptExecutor);
+        inOrder.verify(repository).save(executionCaptor.capture());
+        ScriptExecution execution = executionCaptor.getValue();
+        inOrder.verify(scriptExecutor).execute(same(execution));
+        inOrder.verify(repository).deleteById(execution.getId());
     }
 
     @Test

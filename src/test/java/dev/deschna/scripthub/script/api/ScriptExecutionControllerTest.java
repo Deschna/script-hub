@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.deschna.scripthub.script.application.InvalidScriptSubmissionException;
 import dev.deschna.scripthub.script.application.ScriptExecutionNotFoundException;
+import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
 import dev.deschna.scripthub.script.application.ScriptExecutionService;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
@@ -98,6 +99,20 @@ class ScriptExecutionControllerTest {
                         .content("  "))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Script body must not be blank"));
+    }
+
+    @Test
+    void returnsServiceUnavailableWhenScriptExecutionIsRejected() throws Exception {
+        when(service.submit(BODY)).thenThrow(new ScriptExecutionRejectedException(
+                new IllegalStateException("Executor rejected task")
+        ));
+
+        mockMvc.perform(post("/scripts")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content(BODY))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.detail")
+                        .value("Script execution is temporarily unavailable"));
     }
 
     @Test

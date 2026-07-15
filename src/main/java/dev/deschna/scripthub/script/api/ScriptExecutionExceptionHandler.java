@@ -2,6 +2,7 @@ package dev.deschna.scripthub.script.api;
 
 import dev.deschna.scripthub.script.application.InvalidScriptSubmissionException;
 import dev.deschna.scripthub.script.application.ScriptExecutionNotFoundException;
+import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -19,6 +20,14 @@ public class ScriptExecutionExceptionHandler {
     @ExceptionHandler(ScriptExecutionNotFoundException.class)
     public ProblemDetail handleScriptExecutionNotFound(ScriptExecutionNotFoundException exception) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
+    }
+
+    @ExceptionHandler(ScriptExecutionRejectedException.class)
+    public ProblemDetail handleScriptExecutionRejected(ScriptExecutionRejectedException exception) {
+        return ProblemDetail.forStatusAndDetail(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                exception.getMessage()
+        );
     }
 
     @ExceptionHandler(InvalidScriptExecutionTransitionException.class)

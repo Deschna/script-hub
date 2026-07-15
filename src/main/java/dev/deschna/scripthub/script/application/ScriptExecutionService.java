@@ -26,7 +26,12 @@ public class ScriptExecutionService {
         }
         ScriptExecution execution = ScriptExecution.create(body, clock.instant());
         repository.save(execution);
-        scriptExecutor.execute(execution);
+        try {
+            scriptExecutor.execute(execution);
+        } catch (ScriptExecutionRejectedException exception) {
+            repository.deleteById(execution.getId());
+            throw exception;
+        }
         return execution;
     }
 

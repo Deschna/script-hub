@@ -24,4 +24,9 @@ public class InMemoryScriptExecutionRepository implements ScriptExecutionReposit
     public Optional<ScriptExecution> findById(UUID id) {
         return Optional.ofNullable(executions.get(Objects.requireNonNull(id)));
     }
+
+    @Override
+    public void deleteById(UUID id) {
+        executions.remove(Objects.requireNonNull(id));
+    }
 }

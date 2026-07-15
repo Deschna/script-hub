@@ -1,5 +1,6 @@
 package dev.deschna.scripthub.script.infrastructure.graalvm;
 
+import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
 import dev.deschna.scripthub.script.application.ScriptExecutor;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionStateException;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
@@ -11,6 +12,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.function.Consumer;
 import org.graalvm.polyglot.Context;
@@ -49,7 +51,11 @@ class GraalScriptExecutor implements ScriptExecutor {
     @Override
     public void execute(ScriptExecution execution) {
         Objects.requireNonNull(execution);
-        executor.execute(() -> executeScript(execution));
+        try {
+            executor.execute(() -> executeScript(execution));
+        } catch (RejectedExecutionException exception) {
+            throw new ScriptExecutionRejectedException(exception);
+        }
     }
 
     @Override

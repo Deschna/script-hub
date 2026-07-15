@@ -8,4 +8,6 @@ public interface ScriptExecutionRepository {
     void save(ScriptExecution execution);
 
     Optional<ScriptExecution> findById(UUID id);
+
+    void deleteById(UUID id);
 }

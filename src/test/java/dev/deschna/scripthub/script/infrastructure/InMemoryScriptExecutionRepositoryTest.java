@@ -45,6 +45,16 @@ class InMemoryScriptExecutionRepositoryTest {
     }
 
     @Test
+    void deletesScriptExecution() {
+        ScriptExecution execution = createExecution();
+        repository.save(execution);
+
+        repository.deleteById(execution.getId());
+
+        assertThat(repository.findById(execution.getId())).isEmpty();
+    }
+
+    @Test
     void rejectsMissingId() {
         assertThatNullPointerException()
                 .isThrownBy(() -> repository.findById(null));
@@ -54,6 +64,12 @@ class InMemoryScriptExecutionRepositoryTest {
     void rejectsMissingScriptExecution() {
         assertThatNullPointerException()
                 .isThrownBy(() -> repository.save(null));
+    }
+
+    @Test
+    void rejectsMissingIdWhenDeleting() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> repository.deleteById(null));
     }
 
     private ScriptExecution createExecution() {

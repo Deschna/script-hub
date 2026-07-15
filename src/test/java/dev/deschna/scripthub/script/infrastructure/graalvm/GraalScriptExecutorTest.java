@@ -1,6 +1,7 @@
 package dev.deschna.scripthub.script.infrastructure.graalvm;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.mockito.ArgumentMatchers.any;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptStatus;
 import java.time.Clock;
@@ -18,6 +20,7 @@ import java.time.ZoneOffset;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -269,6 +272,28 @@ class GraalScriptExecutorTest {
     void rejectsMissingScriptExecution() {
         assertThatNullPointerException()
                 .isThrownBy(() -> executor.execute(null));
+    }
+
+    @Test
+    void translatesExecutorRejection() {
+        RejectedExecutionException rejection = new RejectedExecutionException("Queue is full");
+        GraalScriptExecutor rejectingExecutor = new GraalScriptExecutor(
+                command -> {
+                    throw rejection;
+                },
+                timeoutScheduler,
+                CLOCK,
+                new GraalScriptContextRegistry(),
+                EXECUTION_TIMEOUT
+        );
+        ScriptExecution execution = createExecution("console.log('should not run')");
+
+        assertThatExceptionOfType(ScriptExecutionRejectedException.class)
+                .isThrownBy(() -> rejectingExecutor.execute(execution))
+                .withMessage("Script execution is temporarily unavailable")
+                .withCause(rejection);
+
+        assertThat(execution.getStatus()).isEqualTo(ScriptStatus.QUEUED);
     }
 
     @Test
