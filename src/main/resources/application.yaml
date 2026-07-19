@@ -4,4 +4,13 @@ spring:
 
 script-hub:
   execution:
-    timeout: 30s
+    timeout: 30s # Keep max-cpu-time higher unless CPU-heavy scripts should terminate earlier.
+    sandbox:
+      max-isolate-memory: 256MB
+      max-heap-memory: 128MB
+      max-cpu-time: 35s
+      max-ast-depth: 100
+      max-threads: 1
+      max-output-size: 1MB
+      max-error-size: 1MB
+      max-stack-frames: 100

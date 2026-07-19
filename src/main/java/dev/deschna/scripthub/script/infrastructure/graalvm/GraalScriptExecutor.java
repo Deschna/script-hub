@@ -15,6 +15,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.function.Consumer;
+import lombok.extern.slf4j.Slf4j;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,15 +24,20 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 @Component
+@Slf4j
 class GraalScriptExecutor implements ScriptExecutor {
 
-    private static final String DEFAULT_LANGUAGE_ID = "js";
     private static final boolean CANCEL_IF_EXECUTING = true;
+    private static final String RESOURCE_LIMIT_EXCEEDED_MESSAGE =
+            "Script execution resource limit exceeded";
+    private static final String INTERNAL_ERROR_MESSAGE =
+            "Script execution failed due to an internal error";
 
     private final Executor executor;
     private final TaskScheduler timeoutScheduler;
     private final Clock clock;
     private final GraalScriptContextRegistry contextRegistry;
+    private final GraalScriptContextFactory contextFactory;
     private final Duration executionTimeout;
 
     public GraalScriptExecutor(
@@ -39,12 +45,14 @@ class GraalScriptExecutor implements ScriptExecutor {
             @Qualifier("scriptTimeoutTaskScheduler") TaskScheduler timeoutScheduler,
             Clock clock,
             GraalScriptContextRegistry contextRegistry,
+            GraalScriptContextFactory contextFactory,
             @Value("${script-hub.execution.timeout}") Duration executionTimeout
     ) {
         this.executor = Objects.requireNonNull(executor);
         this.timeoutScheduler = Objects.requireNonNull(timeoutScheduler);
         this.clock = Objects.requireNonNull(clock);
         this.contextRegistry = Objects.requireNonNull(contextRegistry);
+        this.contextFactory = Objects.requireNonNull(contextFactory);
         this.executionTimeout = requirePositive(executionTimeout);
     }
 
@@ -52,7 +60,7 @@ class GraalScriptExecutor implements ScriptExecutor {
     public void execute(ScriptExecution execution) {
         Objects.requireNonNull(execution);
         try {
-            executor.execute(() -> executeScript(execution));
+            executor.execute(() -> executeSafely(execution));
         } catch (RejectedExecutionException exception) {
             throw new ScriptExecutionRejectedException(exception);
         }
@@ -65,6 +73,15 @@ class GraalScriptExecutor implements ScriptExecutor {
                 .ifPresent(this::stopContext);
     }
 
+    private void executeSafely(ScriptExecution execution) {
+        // Prevent unexpected worker failures from leaving an execution permanently RUNNING.
+        try {
+            executeScript(execution);
+        } catch (RuntimeException exception) {
+            handleUnexpectedFailure(execution, exception);
+        }
+    }
+
     private void executeScript(ScriptExecution execution) {
         // The task may have been stopped while it was still waiting in the executor queue.
         if (!tryStart(execution)) {
@@ -72,33 +89,47 @@ class GraalScriptExecutor implements ScriptExecutor {
         }
         // Limit the entire RUNNING period, including GraalVM Context initialization.
         ScheduledFuture<?> timeoutTask = scheduleTimeout(execution);
-        try (Context context = Context.newBuilder(DEFAULT_LANGUAGE_ID)
-                .out(outputStreamFor(execution::appendStandardOutput))
-                .err(outputStreamFor(execution::appendErrorOutput))
-                .build()) {
+        try (Context context = contextFactory.create(
+                outputStreamFor(execution::appendStandardOutput),
+                outputStreamFor(execution::appendErrorOutput)
+        )) {
             contextRegistry.register(execution.getId(), context);
             // Stop may happen while the Context is being created, before it is available
             // in the registry.
             if (isCancelled(execution)) {
                 return;
             }
-            context.eval(DEFAULT_LANGUAGE_ID, execution.getBody());
+            context.eval(GraalScriptContextFactory.LANGUAGE_ID, execution.getBody());
         } catch (PolyglotException exception) {
             // Context.close(true) reports cancellation as PolyglotException. Manually
             // stopped and timed-out executions must retain their final domain status.
             if (isCancelled(execution)) {
                 return;
             }
-            execution.fail(clock.instant(), guestStackTraceOf(exception));
+            if (exception.isResourceExhausted()) {
+                fail(execution, resourceExhaustionDiagnosticOf(exception));
+                return;
+            }
+            fail(execution, guestDiagnosticOf(exception));
             return;
-        } catch (InvalidScriptExecutionStateException
-                | InvalidScriptExecutionTransitionException exception) {
+        } catch (InvalidScriptExecutionStateException exception) {
             ignoreIfCancelled(execution, exception);
+            return;
         } finally {
             timeoutTask.cancel(false);
             contextRegistry.unregister(execution.getId());
         }
         complete(execution);
+    }
+
+    private void handleUnexpectedFailure(
+            ScriptExecution execution,
+            RuntimeException exception
+    ) {
+        log.error("Script execution {} failed unexpectedly", execution.getId(), exception);
+        if (execution.getStatus() == ScriptStatus.RUNNING) {
+            fail(execution, INTERNAL_ERROR_MESSAGE);
+        }
     }
 
     private boolean tryStart(ScriptExecution execution) {
@@ -116,6 +147,14 @@ class GraalScriptExecutor implements ScriptExecutor {
     private void complete(ScriptExecution execution) {
         try {
             execution.complete(clock.instant());
+        } catch (InvalidScriptExecutionTransitionException exception) {
+            ignoreIfCancelled(execution, exception);
+        }
+    }
+
+    private void fail(ScriptExecution execution, String diagnostic) {
+        try {
+            execution.fail(clock.instant(), diagnostic);
         } catch (InvalidScriptExecutionTransitionException exception) {
             ignoreIfCancelled(execution, exception);
         }
@@ -171,18 +210,17 @@ class GraalScriptExecutor implements ScriptExecutor {
         return new ScriptExecutionOutputStream(outputAppender);
     }
 
-    private String guestStackTraceOf(PolyglotException exception) {
-        StringBuilder stackTrace = new StringBuilder(exception.toString());
-        for (PolyglotException.StackFrame frame : exception.getPolyglotStackTrace()) {
-            if (frame.isGuestFrame()) {
-                // Store only script-level frames; Java/GraalVM host frames are internal noise
-                // for the script author.
-                stackTrace.append(System.lineSeparator())
-                        .append("\tat ")
-                        .append(frame);
-            }
+    private String guestDiagnosticOf(PolyglotException exception) {
+        String message = exception.getMessage();
+        return message == null ? exception.toString() : message;
+    }
+
+    private String resourceExhaustionDiagnosticOf(PolyglotException exception) {
+        String detail = exception.getMessage();
+        if (detail == null || detail.isBlank()) {
+            return RESOURCE_LIMIT_EXCEEDED_MESSAGE;
         }
-        return stackTrace.toString();
+        return RESOURCE_LIMIT_EXCEEDED_MESSAGE + ": " + detail;
     }
 
     private static class ScriptExecutionOutputStream extends OutputStream {

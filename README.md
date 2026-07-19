@@ -15,9 +15,31 @@ available during execution.
 
 ## Requirements
 
-- JDK 21
+- Oracle GraalVM for JDK 21 — the JDK distribution required for sandboxed script
+  execution with polyglot isolates.
 
-GraalVM JDK 21 is preferred for script execution performance.
+The build includes a platform-specific GraalVM isolate. Build the application
+separately for each target operating system and architecture.
+
+Supported build platforms:
+
+- Windows x86-64
+- Linux x86-64
+- Linux ARM64
+- macOS ARM64
+
+## Execution Sandbox
+
+User-supplied JavaScript runs in an isolated GraalVM context without access to
+host APIs, the filesystem, processes, or additional guest threads. The runtime
+also limits memory, CPU time, execution time, stack depth, and output size.
+
+Scripts run as embedded JavaScript, not as Node.js or browser applications.
+Exceeding a sandbox resource limit fails the execution.
+
+Default execution and sandbox limits are defined under `script-hub.execution`
+in [`application.yaml`](src/main/resources/application.yaml) and can be
+overridden through standard Spring Boot configuration.
 
 ## Run
 
