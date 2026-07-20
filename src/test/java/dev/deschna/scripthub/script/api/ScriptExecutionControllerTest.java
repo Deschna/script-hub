@@ -11,6 +11,7 @@ import dev.deschna.scripthub.script.application.InvalidScriptSubmissionException
 import dev.deschna.scripthub.script.application.ScriptExecutionNotFoundException;
 import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
 import dev.deschna.scripthub.script.application.ScriptExecutionService;
+import dev.deschna.scripthub.script.application.ScriptSubmissionTooLargeException;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptStatus;
@@ -99,6 +100,22 @@ class ScriptExecutionControllerTest {
                         .content("  "))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Script body must not be blank"));
+    }
+
+    @Test
+    void returnsPayloadTooLargeForOversizedScript() throws Exception {
+        long maxScriptSizeBytes = 32;
+        String oversizedBody = "a".repeat((int) maxScriptSizeBytes + 1);
+        when(service.submit(oversizedBody))
+                .thenThrow(new ScriptSubmissionTooLargeException(maxScriptSizeBytes));
+
+        mockMvc.perform(post("/scripts")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content(oversizedBody))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.detail")
+                        .value("Script body exceeds the maximum size of "
+                                + maxScriptSizeBytes + " bytes"));
     }
 
     @Test

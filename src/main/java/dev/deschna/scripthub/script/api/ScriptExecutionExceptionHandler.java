@@ -3,6 +3,7 @@ package dev.deschna.scripthub.script.api;
 import dev.deschna.scripthub.script.application.InvalidScriptSubmissionException;
 import dev.deschna.scripthub.script.application.ScriptExecutionNotFoundException;
 import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
+import dev.deschna.scripthub.script.application.ScriptSubmissionTooLargeException;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -15,6 +16,16 @@ public class ScriptExecutionExceptionHandler {
     @ExceptionHandler(InvalidScriptSubmissionException.class)
     public ProblemDetail handleInvalidScriptSubmission(InvalidScriptSubmissionException exception) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, exception.getMessage());
+    }
+
+    @ExceptionHandler(ScriptSubmissionTooLargeException.class)
+    public ProblemDetail handleScriptSubmissionTooLarge(
+            ScriptSubmissionTooLargeException exception
+    ) {
+        return ProblemDetail.forStatusAndDetail(
+                HttpStatus.PAYLOAD_TOO_LARGE,
+                exception.getMessage()
+        );
     }
 
     @ExceptionHandler(ScriptExecutionNotFoundException.class)

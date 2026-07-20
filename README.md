@@ -28,7 +28,7 @@ Supported build platforms:
 - Linux ARM64
 - macOS ARM64
 
-## Execution Sandbox
+## Execution Limits and Sandbox
 
 User-supplied JavaScript runs in an isolated GraalVM context without access to
 host APIs, the filesystem, processes, or additional guest threads. The runtime
@@ -40,6 +40,8 @@ Exceeding a sandbox resource limit fails the execution.
 Default execution and sandbox limits are defined under `script-hub.execution`
 in [`application.yaml`](src/main/resources/application.yaml) and can be
 overridden through standard Spring Boot configuration.
+
+Script source code is limited to 64 KB in UTF-8 by default.
 
 ## Run
 

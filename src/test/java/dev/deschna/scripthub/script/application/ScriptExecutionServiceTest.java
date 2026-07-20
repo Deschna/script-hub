@@ -22,21 +22,30 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.util.unit.DataSize;
 
 class ScriptExecutionServiceTest {
 
     private static final String BODY = "console.log('hello')";
     private static final Instant NOW = Instant.parse("2026-06-14T10:15:30Z");
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+    private static final DataSize MAX_SCRIPT_SIZE = DataSize.ofKilobytes(64);
     private static final UUID UNKNOWN_ID =
             UUID.fromString("00000000-0000-0000-0000-000000000404");
 
     private final ScriptExecutionRepository repository = mock(ScriptExecutionRepository.class);
     private final ScriptExecutor scriptExecutor = mock(ScriptExecutor.class);
     private final ScriptExecutionService service =
-            new ScriptExecutionService(repository, scriptExecutor, CLOCK);
+            new ScriptExecutionService(
+                    repository,
+                    scriptExecutor,
+                    CLOCK,
+                    MAX_SCRIPT_SIZE
+            );
 
     @Test
     void submitsScriptExecution() {
@@ -167,5 +176,49 @@ class ScriptExecutionServiceTest {
                 .isThrownBy(() -> service.submit("  "));
 
         verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void rejectsScriptBodyExceedingMaximumUtf8Size() {
+        ScriptExecutionService sizeLimitedService = new ScriptExecutionService(
+                repository,
+                scriptExecutor,
+                CLOCK,
+                DataSize.ofBytes(3)
+        );
+
+        assertThatExceptionOfType(ScriptSubmissionTooLargeException.class)
+                .isThrownBy(() -> sizeLimitedService.submit("éé"))
+                .withMessage("Script body exceeds the maximum size of 3 bytes");
+
+        verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void acceptsScriptBodyAtMaximumUtf8Size() {
+        ScriptExecutionService sizeLimitedService = new ScriptExecutionService(
+                repository,
+                scriptExecutor,
+                CLOCK,
+                DataSize.ofBytes(4)
+        );
+
+        ScriptExecution execution = sizeLimitedService.submit("éé");
+
+        assertThat(execution.getBody()).isEqualTo("éé");
+        verify(repository).save(same(execution));
+        verify(scriptExecutor).execute(same(execution));
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, -1})
+    void rejectsNonPositiveMaximumScriptSize(long maxScriptSizeBytes) {
+        assertThatExceptionOfType(IllegalArgumentException.class)
+                .isThrownBy(() -> new ScriptExecutionService(
+                        repository,
+                        scriptExecutor,
+                        CLOCK,
+                        DataSize.ofBytes(maxScriptSizeBytes)
+                ));
     }
 }
