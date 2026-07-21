@@ -6,15 +6,12 @@ import dev.deschna.scripthub.script.domain.InvalidScriptExecutionStateException;
 import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
 import dev.deschna.scripthub.script.domain.ScriptExecution;
 import dev.deschna.scripthub.script.domain.ScriptStatus;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
-import java.util.function.Consumer;
 import lombok.extern.slf4j.Slf4j;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
@@ -89,10 +86,11 @@ class GraalScriptExecutor implements ScriptExecutor {
         }
         // Limit the entire RUNNING period, including GraalVM Context initialization.
         ScheduledFuture<?> timeoutTask = scheduleTimeout(execution);
-        try (Context context = contextFactory.create(
-                outputStreamFor(execution::appendStandardOutput),
-                outputStreamFor(execution::appendErrorOutput)
-        )) {
+        try (ScriptExecutionOutputStream standardOutput =
+                     new ScriptExecutionOutputStream(execution::appendStandardOutput);
+                ScriptExecutionOutputStream errorOutput =
+                     new ScriptExecutionOutputStream(execution::appendErrorOutput);
+                Context context = contextFactory.create(standardOutput, errorOutput)) {
             contextRegistry.register(execution.getId(), context);
             // Stop may happen while the Context is being created, before it is available
             // in the registry.
@@ -206,10 +204,6 @@ class GraalScriptExecutor implements ScriptExecutor {
         return timeout;
     }
 
-    private OutputStream outputStreamFor(Consumer<String> outputAppender) {
-        return new ScriptExecutionOutputStream(outputAppender);
-    }
-
     private String guestDiagnosticOf(PolyglotException exception) {
         String message = exception.getMessage();
         return message == null ? exception.toString() : message;
@@ -223,30 +217,4 @@ class GraalScriptExecutor implements ScriptExecutor {
         return RESOURCE_LIMIT_EXCEEDED_MESSAGE + ": " + detail;
     }
 
-    private static class ScriptExecutionOutputStream extends OutputStream {
-
-        private final Consumer<String> outputAppender;
-        // Reused by write(int) to delegate single-byte writes without per-call allocation.
-        private final byte[] singleByte = new byte[1];
-
-        ScriptExecutionOutputStream(Consumer<String> outputAppender) {
-            this.outputAppender = Objects.requireNonNull(outputAppender);
-        }
-
-        @Override
-        public void write(int value) {
-            singleByte[0] = (byte) value;
-            write(singleByte, 0, 1);
-        }
-
-        @Override
-        public void write(byte[] buffer, int offset, int length) {
-            // Preserve OutputStream's offset/length contract before decoding the chunk.
-            Objects.checkFromIndexSize(offset, length, buffer.length);
-            if (length == 0) {
-                return;
-            }
-            outputAppender.accept(new String(buffer, offset, length, StandardCharsets.UTF_8));
-        }
-    }
 }
