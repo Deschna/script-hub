@@ -7,6 +7,8 @@ script-hub:
     timeout: 30s # Keep max-cpu-time higher unless CPU-heavy scripts should terminate earlier.
     submission:
       max-size: 64KB
+    diagnostics:
+      max-length: 8192 # Unicode code points
     sandbox:
       max-isolate-memory: 256MB
       max-heap-memory: 128MB

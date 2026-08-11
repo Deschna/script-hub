@@ -23,6 +23,7 @@ class GraalScriptExecutorSandboxTest {
     private static final Instant EXECUTED_AT = Instant.parse("2026-06-14T10:15:31Z");
     private static final Clock CLOCK = Clock.fixed(EXECUTED_AT, ZoneOffset.UTC);
     private static final Duration EXECUTION_TIMEOUT = Duration.ofSeconds(10);
+    private static final int MAX_DIAGNOSTIC_LENGTH = 8192;
     private static final long OUTPUT_LIMIT_BYTES = 64;
     private static final String RESOURCE_LIMIT_EXCEEDED_PREFIX =
             "Script execution resource limit exceeded:";
@@ -137,7 +138,8 @@ class GraalScriptExecutorSandboxTest {
                 CLOCK,
                 new GraalScriptContextRegistry(),
                 new GraalScriptContextFactory(properties),
-                EXECUTION_TIMEOUT
+                EXECUTION_TIMEOUT,
+                MAX_DIAGNOSTIC_LENGTH
         );
     }
 

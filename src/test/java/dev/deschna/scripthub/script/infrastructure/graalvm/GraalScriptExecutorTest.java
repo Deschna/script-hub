@@ -42,6 +42,7 @@ class GraalScriptExecutorTest {
     private static final long WAIT_TIMEOUT_SECONDS = 5;
     private static final long POLL_INTERVAL_MILLIS = 10;
     private static final Duration EXECUTION_TIMEOUT = Duration.ofSeconds(10);
+    private static final int MAX_DIAGNOSTIC_LENGTH = 8192;
     private static final String INTERNAL_ERROR_MESSAGE =
             "Script execution failed due to an internal error";
     private static final GraalScriptSandboxProperties VALID_SANDBOX_PROPERTIES =
@@ -180,7 +181,8 @@ class GraalScriptExecutorTest {
                 CLOCK,
                 new GraalScriptContextRegistry(),
                 new GraalScriptContextFactory(VALID_SANDBOX_PROPERTIES),
-                EXECUTION_TIMEOUT
+                EXECUTION_TIMEOUT,
+                MAX_DIAGNOSTIC_LENGTH
         );
         String infiniteScript = """
                 console.log('started');
@@ -273,6 +275,29 @@ class GraalScriptExecutorTest {
     }
 
     @Test
+    void truncatesLongFailureDiagnostic() {
+        int maxDiagnosticLength = 32;
+        GraalScriptExecutor executor = new GraalScriptExecutor(
+                Runnable::run,
+                timeoutScheduler,
+                CLOCK,
+                new GraalScriptContextRegistry(),
+                new GraalScriptContextFactory(VALID_SANDBOX_PROPERTIES),
+                EXECUTION_TIMEOUT,
+                maxDiagnosticLength
+        );
+        ScriptExecution execution = createExecution("throw new Error('👋'.repeat(100))");
+
+        executor.execute(execution);
+
+        String diagnostic = execution.getErrorStackTrace();
+        assertThat(execution.getStatus()).isEqualTo(ScriptStatus.FAILED);
+        assertThat(diagnostic.codePointCount(0, diagnostic.length()))
+                .isEqualTo(maxDiagnosticLength);
+        assertThat(diagnostic).endsWith("…");
+    }
+
+    @Test
     void failsScriptExecutionWhenContextCreationFails() {
         GraalScriptContextFactory failingContextFactory = mock(GraalScriptContextFactory.class);
         when(failingContextFactory.create(any(), any()))
@@ -283,7 +308,8 @@ class GraalScriptExecutorTest {
                 CLOCK,
                 new GraalScriptContextRegistry(),
                 failingContextFactory,
-                EXECUTION_TIMEOUT
+                EXECUTION_TIMEOUT,
+                MAX_DIAGNOSTIC_LENGTH
         );
         ScriptExecution execution = createExecution("console.log('should not run')");
 
@@ -308,7 +334,8 @@ class GraalScriptExecutorTest {
                 CLOCK,
                 new GraalScriptContextRegistry(),
                 new GraalScriptContextFactory(VALID_SANDBOX_PROPERTIES),
-                EXECUTION_TIMEOUT
+                EXECUTION_TIMEOUT,
+                MAX_DIAGNOSTIC_LENGTH
         );
         ScriptExecution execution = createExecution("console.log('should not run')");
 
@@ -359,7 +386,23 @@ class GraalScriptExecutorTest {
                         CLOCK,
                         new GraalScriptContextRegistry(),
                         new GraalScriptContextFactory(VALID_SANDBOX_PROPERTIES),
-                        Duration.ofSeconds(timeoutSeconds)
+                        Duration.ofSeconds(timeoutSeconds),
+                        MAX_DIAGNOSTIC_LENGTH
+                ));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void rejectsNonPositiveMaximumDiagnosticLength(int maxDiagnosticLength) {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new GraalScriptExecutor(
+                        Runnable::run,
+                        timeoutScheduler,
+                        CLOCK,
+                        new GraalScriptContextRegistry(),
+                        new GraalScriptContextFactory(VALID_SANDBOX_PROPERTIES),
+                        EXECUTION_TIMEOUT,
+                        maxDiagnosticLength
                 ));
     }
 
@@ -374,7 +417,8 @@ class GraalScriptExecutorTest {
                 CLOCK,
                 new GraalScriptContextRegistry(),
                 new GraalScriptContextFactory(VALID_SANDBOX_PROPERTIES),
-                EXECUTION_TIMEOUT
+                EXECUTION_TIMEOUT,
+                MAX_DIAGNOSTIC_LENGTH
         );
     }
 

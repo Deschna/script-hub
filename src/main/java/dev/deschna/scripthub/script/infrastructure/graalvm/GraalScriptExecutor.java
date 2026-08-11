@@ -29,6 +29,7 @@ class GraalScriptExecutor implements ScriptExecutor {
             "Script execution resource limit exceeded";
     private static final String INTERNAL_ERROR_MESSAGE =
             "Script execution failed due to an internal error";
+    private static final String TRUNCATION_MARKER = "…";
 
     private final Executor executor;
     private final TaskScheduler timeoutScheduler;
@@ -36,6 +37,7 @@ class GraalScriptExecutor implements ScriptExecutor {
     private final GraalScriptContextRegistry contextRegistry;
     private final GraalScriptContextFactory contextFactory;
     private final Duration executionTimeout;
+    private final int maxDiagnosticLength;
 
     public GraalScriptExecutor(
             @Qualifier("scriptExecutionTaskExecutor") Executor executor,
@@ -43,14 +45,16 @@ class GraalScriptExecutor implements ScriptExecutor {
             Clock clock,
             GraalScriptContextRegistry contextRegistry,
             GraalScriptContextFactory contextFactory,
-            @Value("${script-hub.execution.timeout}") Duration executionTimeout
+            @Value("${script-hub.execution.timeout}") Duration executionTimeout,
+            @Value("${script-hub.execution.diagnostics.max-length}") int maxDiagnosticLength
     ) {
         this.executor = Objects.requireNonNull(executor);
         this.timeoutScheduler = Objects.requireNonNull(timeoutScheduler);
         this.clock = Objects.requireNonNull(clock);
         this.contextRegistry = Objects.requireNonNull(contextRegistry);
         this.contextFactory = Objects.requireNonNull(contextFactory);
-        this.executionTimeout = requirePositive(executionTimeout);
+        this.executionTimeout = requirePositiveExecutionTimeout(executionTimeout);
+        this.maxDiagnosticLength = requirePositiveDiagnosticLength(maxDiagnosticLength);
     }
 
     @Override
@@ -152,7 +156,7 @@ class GraalScriptExecutor implements ScriptExecutor {
 
     private void fail(ScriptExecution execution, String diagnostic) {
         try {
-            execution.fail(clock.instant(), diagnostic);
+            execution.fail(clock.instant(), truncateDiagnostic(diagnostic));
         } catch (InvalidScriptExecutionTransitionException exception) {
             ignoreIfCancelled(execution, exception);
         }
@@ -196,12 +200,31 @@ class GraalScriptExecutor implements ScriptExecutor {
         }
     }
 
-    private Duration requirePositive(Duration timeout) {
+    private Duration requirePositiveExecutionTimeout(Duration timeout) {
         Objects.requireNonNull(timeout);
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("Script execution timeout must be positive");
         }
         return timeout;
+    }
+
+    private int requirePositiveDiagnosticLength(int maxLength) {
+        if (maxLength <= 0) {
+            throw new IllegalArgumentException("Maximum diagnostic length must be positive");
+        }
+        return maxLength;
+    }
+
+    private String truncateDiagnostic(String diagnostic) {
+        Objects.requireNonNull(diagnostic);
+        int diagnosticLength = diagnostic.codePointCount(0, diagnostic.length());
+        if (diagnosticLength <= maxDiagnosticLength) {
+            return diagnostic;
+        }
+
+        int retainedCodePoints = maxDiagnosticLength - 1;
+        int endIndex = diagnostic.offsetByCodePoints(0, retainedCodePoints);
+        return diagnostic.substring(0, endIndex) + TRUNCATION_MARKER;
     }
 
     private String guestDiagnosticOf(PolyglotException exception) {
