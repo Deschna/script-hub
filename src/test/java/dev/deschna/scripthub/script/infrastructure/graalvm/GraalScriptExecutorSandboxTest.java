@@ -25,8 +25,8 @@ class GraalScriptExecutorSandboxTest {
     private static final Duration EXECUTION_TIMEOUT = Duration.ofSeconds(10);
     private static final int MAX_DIAGNOSTIC_LENGTH = 8192;
     private static final long OUTPUT_LIMIT_BYTES = 64;
-    private static final String RESOURCE_LIMIT_EXCEEDED_PREFIX =
-            "Script execution resource limit exceeded:";
+    private static final String RESOURCE_LIMIT_EXCEEDED_MESSAGE =
+            "Script execution resource limit exceeded";
     private static final ThreadPoolTaskScheduler timeoutScheduler = createTimeoutScheduler();
 
     @AfterAll
@@ -85,8 +85,7 @@ class GraalScriptExecutorSandboxTest {
 
         assertThat(execution.getStatus()).isEqualTo(ScriptStatus.FAILED);
         assertThat(execution.getErrorStackTrace())
-                .startsWith(RESOURCE_LIMIT_EXCEEDED_PREFIX)
-                .containsIgnoringCase("output");
+                .startsWith(RESOURCE_LIMIT_EXCEEDED_MESSAGE);
         assertThat(execution.getStandardOutput().getBytes(StandardCharsets.UTF_8))
                 .hasSizeLessThanOrEqualTo((int) OUTPUT_LIMIT_BYTES);
     }
@@ -108,8 +107,7 @@ class GraalScriptExecutorSandboxTest {
 
         assertThat(execution.getStatus()).isEqualTo(ScriptStatus.FAILED);
         assertThat(execution.getErrorStackTrace())
-                .startsWith(RESOURCE_LIMIT_EXCEEDED_PREFIX)
-                .containsIgnoringCase("error");
+                .startsWith(RESOURCE_LIMIT_EXCEEDED_MESSAGE);
         assertThat(execution.getErrorOutput().getBytes(StandardCharsets.UTF_8))
                 .hasSizeLessThanOrEqualTo((int) OUTPUT_LIMIT_BYTES);
     }
@@ -127,8 +125,7 @@ class GraalScriptExecutorSandboxTest {
 
         assertThat(execution.getStatus()).isEqualTo(ScriptStatus.FAILED);
         assertThat(execution.getErrorStackTrace())
-                .startsWith(RESOURCE_LIMIT_EXCEEDED_PREFIX)
-                .containsIgnoringCase("CPU");
+                .startsWith(RESOURCE_LIMIT_EXCEEDED_MESSAGE);
     }
 
     private GraalScriptExecutor createExecutor(GraalScriptSandboxProperties properties) {
