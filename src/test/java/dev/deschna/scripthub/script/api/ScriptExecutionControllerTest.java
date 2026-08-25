@@ -1,0 +1,173 @@
+package dev.deschna.scripthub.script.api;
+
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import dev.deschna.scripthub.script.application.InvalidScriptSubmissionException;
+import dev.deschna.scripthub.script.application.ScriptExecutionNotFoundException;
+import dev.deschna.scripthub.script.application.ScriptExecutionRejectedException;
+import dev.deschna.scripthub.script.application.ScriptExecutionService;
+import dev.deschna.scripthub.script.application.ScriptSubmissionTooLargeException;
+import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
+import dev.deschna.scripthub.script.domain.ScriptExecution;
+import dev.deschna.scripthub.script.domain.ScriptStatus;
+import java.time.Instant;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+@WebMvcTest(ScriptExecutionController.class)
+class ScriptExecutionControllerTest {
+
+    private static final String BODY = "console.log('hello')";
+    private static final Instant SUBMITTED_AT = Instant.parse("2026-06-14T10:15:30Z");
+    private static final Instant STARTED_AT = Instant.parse("2026-06-14T10:15:31Z");
+    private static final Instant FINISHED_AT = Instant.parse("2026-06-14T10:15:35Z");
+    private static final UUID UNKNOWN_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000404");
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private ScriptExecutionService service;
+
+    @Test
+    void submitsScriptExecution() throws Exception {
+        ScriptExecution execution = ScriptExecution.create(BODY, SUBMITTED_AT);
+        when(service.submit(BODY)).thenReturn(execution);
+
+        mockMvc.perform(post("/scripts")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content(BODY))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("Location", "/scripts/" + execution.getId()))
+                .andExpect(jsonPath("$.id").value(execution.getId().toString()))
+                .andExpect(jsonPath("$.body").value(BODY))
+                .andExpect(jsonPath("$.status").value(ScriptStatus.QUEUED.name()))
+                .andExpect(jsonPath("$.submittedAt").value(SUBMITTED_AT.toString()))
+                .andExpect(jsonPath("$.standardOutput").value(""))
+                .andExpect(jsonPath("$.errorOutput").value(""));
+    }
+
+    @Test
+    void getsScriptExecutionById() throws Exception {
+        ScriptExecution execution = ScriptExecution.create(BODY, SUBMITTED_AT);
+        execution.start(STARTED_AT);
+        execution.appendStandardOutput("hello\n");
+        when(service.getById(execution.getId())).thenReturn(execution);
+
+        mockMvc.perform(get("/scripts/{id}", execution.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(execution.getId().toString()))
+                .andExpect(jsonPath("$.body").value(BODY))
+                .andExpect(jsonPath("$.status").value(ScriptStatus.RUNNING.name()))
+                .andExpect(jsonPath("$.submittedAt").value(SUBMITTED_AT.toString()))
+                .andExpect(jsonPath("$.startedAt").value(STARTED_AT.toString()))
+                .andExpect(jsonPath("$.standardOutput").value("hello\n"))
+                .andExpect(jsonPath("$.errorOutput").value(""));
+    }
+
+    @Test
+    void stopsScriptExecution() throws Exception {
+        ScriptExecution execution = ScriptExecution.create(BODY, SUBMITTED_AT);
+        execution.start(STARTED_AT);
+        execution.stop(FINISHED_AT);
+        when(service.stop(execution.getId())).thenReturn(execution);
+
+        mockMvc.perform(post("/scripts/{id}/stop", execution.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(execution.getId().toString()))
+                .andExpect(jsonPath("$.status").value(ScriptStatus.STOPPED.name()))
+                .andExpect(jsonPath("$.finishedAt").value(FINISHED_AT.toString()));
+    }
+
+    @Test
+    void returnsBadRequestForInvalidSubmission() throws Exception {
+        when(service.submit("  "))
+                .thenThrow(new InvalidScriptSubmissionException("Script body must not be blank"));
+
+        mockMvc.perform(post("/scripts")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content("  "))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Script body must not be blank"));
+    }
+
+    @Test
+    void returnsPayloadTooLargeForOversizedScript() throws Exception {
+        long maxScriptSizeBytes = 32;
+        String oversizedBody = "a".repeat((int) maxScriptSizeBytes + 1);
+        when(service.submit(oversizedBody))
+                .thenThrow(new ScriptSubmissionTooLargeException(maxScriptSizeBytes));
+
+        mockMvc.perform(post("/scripts")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content(oversizedBody))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.detail")
+                        .value("Script body exceeds the maximum size of "
+                                + maxScriptSizeBytes + " bytes"));
+    }
+
+    @Test
+    void returnsServiceUnavailableWhenScriptExecutionIsRejected() throws Exception {
+        when(service.submit(BODY)).thenThrow(new ScriptExecutionRejectedException(
+                new IllegalStateException("Executor rejected task")
+        ));
+
+        mockMvc.perform(post("/scripts")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content(BODY))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.detail")
+                        .value("Script execution is temporarily unavailable"));
+    }
+
+    @Test
+    void returnsNotFoundForUnknownScriptExecution() throws Exception {
+        when(service.getById(UNKNOWN_ID))
+                .thenThrow(new ScriptExecutionNotFoundException(UNKNOWN_ID));
+
+        mockMvc.perform(get("/scripts/{id}", UNKNOWN_ID))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Script execution not found: " + UNKNOWN_ID));
+    }
+
+    @Test
+    void returnsNotFoundWhenStoppingUnknownScriptExecution() throws Exception {
+        when(service.stop(UNKNOWN_ID))
+                .thenThrow(new ScriptExecutionNotFoundException(UNKNOWN_ID));
+
+        mockMvc.perform(post("/scripts/{id}/stop", UNKNOWN_ID))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Script execution not found: " + UNKNOWN_ID));
+    }
+
+    @Test
+    void returnsConflictWhenScriptExecutionCannotBeStopped() throws Exception {
+        ScriptExecution execution = ScriptExecution.create(BODY, SUBMITTED_AT);
+        execution.start(STARTED_AT);
+        execution.complete(FINISHED_AT);
+        when(service.stop(execution.getId()))
+                .thenThrow(new InvalidScriptExecutionTransitionException(
+                        ScriptStatus.COMPLETED,
+                        ScriptStatus.QUEUED,
+                        ScriptStatus.RUNNING
+                ));
+
+        mockMvc.perform(post("/scripts/{id}/stop", execution.getId()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail")
+                        .value("Invalid script execution status: COMPLETED, expected: "
+                                + "QUEUED, RUNNING"));
+    }
+}

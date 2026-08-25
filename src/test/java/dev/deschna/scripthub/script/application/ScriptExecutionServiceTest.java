@@ -1,0 +1,224 @@
+package dev.deschna.scripthub.script.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import dev.deschna.scripthub.script.domain.InvalidScriptExecutionTransitionException;
+import dev.deschna.scripthub.script.domain.ScriptExecution;
+import dev.deschna.scripthub.script.domain.ScriptExecutionRepository;
+import dev.deschna.scripthub.script.domain.ScriptStatus;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.springframework.util.unit.DataSize;
+
+class ScriptExecutionServiceTest {
+
+    private static final String BODY = "console.log('hello')";
+    private static final Instant NOW = Instant.parse("2026-06-14T10:15:30Z");
+    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+    private static final DataSize MAX_SCRIPT_SIZE = DataSize.ofKilobytes(64);
+    private static final UUID UNKNOWN_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000404");
+
+    private final ScriptExecutionRepository repository = mock(ScriptExecutionRepository.class);
+    private final ScriptExecutor scriptExecutor = mock(ScriptExecutor.class);
+    private final ScriptExecutionService service =
+            new ScriptExecutionService(
+                    repository,
+                    scriptExecutor,
+                    CLOCK,
+                    MAX_SCRIPT_SIZE
+            );
+
+    @Test
+    void submitsScriptExecution() {
+        ScriptExecution execution = service.submit(BODY);
+
+        assertThat(execution.getId()).isNotNull();
+        assertThat(execution.getBody()).isEqualTo(BODY);
+        assertThat(execution.getSubmittedAt()).isEqualTo(NOW);
+        assertThat(execution.getStatus()).isEqualTo(ScriptStatus.QUEUED);
+        InOrder inOrder = inOrder(repository, scriptExecutor);
+        inOrder.verify(repository).save(same(execution));
+        inOrder.verify(scriptExecutor).execute(same(execution));
+    }
+
+    @Test
+    void removesScriptExecutionWhenDispatchIsRejected() {
+        ScriptExecutionRejectedException rejection = new ScriptExecutionRejectedException(
+                new IllegalStateException("Executor rejected task")
+        );
+        doThrow(rejection).when(scriptExecutor).execute(any());
+
+        assertThatExceptionOfType(ScriptExecutionRejectedException.class)
+                .isThrownBy(() -> service.submit(BODY))
+                .isSameAs(rejection);
+
+        ArgumentCaptor<ScriptExecution> executionCaptor =
+                ArgumentCaptor.forClass(ScriptExecution.class);
+        InOrder inOrder = inOrder(repository, scriptExecutor);
+        inOrder.verify(repository).save(executionCaptor.capture());
+        ScriptExecution execution = executionCaptor.getValue();
+        inOrder.verify(scriptExecutor).execute(same(execution));
+        inOrder.verify(repository).deleteById(execution.getId());
+    }
+
+    @Test
+    void getsScriptExecutionById() {
+        ScriptExecution execution = ScriptExecution.create(BODY, NOW);
+        when(repository.findById(execution.getId())).thenReturn(Optional.of(execution));
+
+        ScriptExecution foundExecution = service.getById(execution.getId());
+
+        assertThat(foundExecution).isSameAs(execution);
+        verify(repository).findById(execution.getId());
+        verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void stopsQueuedScriptExecution() {
+        ScriptExecution execution = ScriptExecution.create(BODY, NOW);
+        when(repository.findById(execution.getId())).thenReturn(Optional.of(execution));
+
+        ScriptExecution stoppedExecution = service.stop(execution.getId());
+
+        assertThat(stoppedExecution).isSameAs(execution);
+        assertThat(stoppedExecution.getStatus()).isEqualTo(ScriptStatus.STOPPED);
+        assertThat(stoppedExecution.getFinishedAt()).isEqualTo(NOW);
+        verify(repository).findById(execution.getId());
+        verify(scriptExecutor).stop(same(execution));
+    }
+
+    @Test
+    void rejectsStoppingUnknownScriptExecution() {
+        when(repository.findById(UNKNOWN_ID)).thenReturn(Optional.empty());
+
+        assertThatExceptionOfType(ScriptExecutionNotFoundException.class)
+                .isThrownBy(() -> service.stop(UNKNOWN_ID))
+                .withMessage("Script execution not found: " + UNKNOWN_ID);
+
+        verify(repository).findById(UNKNOWN_ID);
+        verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void rejectsStoppingCompletedScriptExecution() {
+        ScriptExecution execution = ScriptExecution.create(BODY, NOW);
+        execution.start(NOW);
+        execution.complete(NOW);
+        when(repository.findById(execution.getId())).thenReturn(Optional.of(execution));
+
+        assertThatExceptionOfType(InvalidScriptExecutionTransitionException.class)
+                .isThrownBy(() -> service.stop(execution.getId()))
+                .withMessage("Invalid script execution status: COMPLETED, expected: "
+                        + "QUEUED, RUNNING");
+
+        verify(repository).findById(execution.getId());
+        verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void rejectsMissingIdWhenStopping() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> service.stop(null));
+
+        verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void rejectsUnknownId() {
+        when(repository.findById(UNKNOWN_ID)).thenReturn(Optional.empty());
+
+        assertThatExceptionOfType(ScriptExecutionNotFoundException.class)
+                .isThrownBy(() -> service.getById(UNKNOWN_ID))
+                .withMessage("Script execution not found: " + UNKNOWN_ID);
+
+        verify(repository).findById(UNKNOWN_ID);
+        verifyNoInteractions(scriptExecutor);
+    }
+
+    @Test
+    void rejectsMissingId() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> service.getById(null));
+
+        verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void rejectsMissingBody() {
+        assertThatExceptionOfType(InvalidScriptSubmissionException.class)
+                .isThrownBy(() -> service.submit(null));
+
+        verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void rejectsBlankBody() {
+        assertThatExceptionOfType(InvalidScriptSubmissionException.class)
+                .isThrownBy(() -> service.submit("  "));
+
+        verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void rejectsScriptBodyExceedingMaximumUtf8Size() {
+        ScriptExecutionService sizeLimitedService = new ScriptExecutionService(
+                repository,
+                scriptExecutor,
+                CLOCK,
+                DataSize.ofBytes(3)
+        );
+
+        assertThatExceptionOfType(ScriptSubmissionTooLargeException.class)
+                .isThrownBy(() -> sizeLimitedService.submit("éé"))
+                .withMessage("Script body exceeds the maximum size of 3 bytes");
+
+        verifyNoInteractions(repository, scriptExecutor);
+    }
+
+    @Test
+    void acceptsScriptBodyAtMaximumUtf8Size() {
+        ScriptExecutionService sizeLimitedService = new ScriptExecutionService(
+                repository,
+                scriptExecutor,
+                CLOCK,
+                DataSize.ofBytes(4)
+        );
+
+        ScriptExecution execution = sizeLimitedService.submit("éé");
+
+        assertThat(execution.getBody()).isEqualTo("éé");
+        verify(repository).save(same(execution));
+        verify(scriptExecutor).execute(same(execution));
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, -1})
+    void rejectsNonPositiveMaximumScriptSize(long maxScriptSizeBytes) {
+        assertThatExceptionOfType(IllegalArgumentException.class)
+                .isThrownBy(() -> new ScriptExecutionService(
+                        repository,
+                        scriptExecutor,
+                        CLOCK,
+                        DataSize.ofBytes(maxScriptSizeBytes)
+                ));
+    }
+}
